@@ -1,0 +1,40 @@
+- name: 2.2 Limitation of privilege mechanisms
+  hosts: all
+  become: true
+  remote_user: «your_user»
+  vars_prompt:
+    - name: "allowed_sudo_users"
+      prompt: "Specify a list of users who should be allowed to use the sudo command (separated by commas)"
+      private: no
+  tasks:
+    - name: 2.2.1 Add pam_wheel.so to /etc/pam.d/su
+      lineinfile:
+        path: /etc/pam.d/su
+        line: "auth required pam_wheel.so use_uid"
+        insertafter: EOF
+    - name: 2.2.1 Get list of users to add to wheel group
+      pause:
+        prompt: "Please provide the list of users to add to the wheel group"
+      register: admin_input
+    - name: Add users to wheel group
+      lineinfile:
+        path: /etc/group
+        regexp: '^wheel:'
+        line: "wheel:x:10:root,{{ admin_input.wheel_group }}"
+      when: wheel_group.stdout is defined
+    - name: 2.2.2 Limit the list of users who are allowed to use the sudo command and commands allowed to be executed via sudo by revising the /etc/sudoers file
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ item }} ALL=(ALL:ALL) ALL"
+        state: present
+        regexp: "^{{ item }}"
+      with_items: "{{ allowed_sudo_users.split(',') }}"
+      when: allowed_sudo_users is defined
+      changed_when: false
+    - name: Prohibit the use of sudo for other users
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ item }}"
+        state: absent
+      with_lines: "grep -vE '^{{ allowed_sudo_users }}' /etc/passwd | cut -d: -f1 | sed 's/^/%/g' | sed 's/$/ ALL=(ALL:ALL) ALL/'"
+      when: allowed_sudo_users is defined
