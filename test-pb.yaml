@@ -1,252 +1,59 @@
-- name: 2.3. Setting up access rights to file system objects
+- name: 2.6 Configuring user space protection tools from the Linux kernel
   hosts: all
-  become: yes
+  become: true
   remote_user: fstec
-  gather_facts: true
-  vars:
-    whitelist_apps:
-      - /usr/sbin/haproxy
-
   tasks:
+    - name: 2.6.1. Prohibit connection to other processes using ptrace
+      sysctl:
+        name: kernel.yama.ptrace_scope
+        value: "3"
+        state: present
 
-    - name: 2.3.1 Set the rights to /etc/passwd
-      ansible.builtin.file:
-        path: /etc/passwd
-        owner: root
-        group: root
-        mode: '0644'
+    - name: 2.6.2. Limit unsafe options for passing through symbolic links
+      sysctl:
+        name: fs.protected_symlinks
+        value: "1"
+        state: present
+
+
+    - name: 2.6.3. Limit unsafe options for working with hard links
+      sysctl:
+        name: fs.protected_hardlinks
+        value: "1"
+        state: present
+
+    - name: 2.6.4. Enable protection against unintentional writing to a FIFO object
+      sysctl:
+        name: fs.protected_fifos
+        value: "2"
+        state: present
+
+    - name: 2.6.5. Enable protection against unintentional writing to a file
       become: yes
+      sysctl:
+        name: fs.protected_regular
+        value: 2
+      register: sysctl_result
+    - name: Check the result of changing the sysctl option
+      debug:
+        var: sysctl_result
 
-    - name: 2.3.1 Set the rights to /etc/group
-      ansible.builtin.file:
-        path: /etc/group
-        owner: root
-        group: root
-        mode: '0644'
-      become: yes
-
-    - name: 2.3.1 Set the rights to /etc/shadow
-      ansible.builtin.file:
-        path: /etc/shadow
-        owner: root
-        group: root
-        mode: '0600'
-      become: yes
-
-    - name: 2.3.2. Set the correct access rights to the files of running processes by executing a command like chmod go-w /path/to/file for all executable files currently running and the corresponding libraries. After that, it is necessary to check that the directory containing this file, as well as all parent directories, are not writable by unprivileged users.
-      shell: >
-       find /proc -maxdepth 2 -type f -executable -execdir chmod -R
-       go-w {} \;
-      register: procoutput
-      changed_when: false
+    - name: 2.6.6. Prohibit the creation of core dump
+      sysctl:
+        name: fs.suid_dumpable
+        value: 0
+      register: sysctl_result
+    - name: Check the result of changing the sysctl option
+      debug:
+        var: sysctl_result
     
-    - name: 2.3.3 Set file access rights for cron files
-      find:
-        paths: /etc/cron*
-        patterns: "*"
-        file_type: file
-        recurse: yes
-      register: cronfiles
-    - name: Set correct permissions for cron files
-      file:
-        path: "{{ item.path }}"
-        mode: "0640"
-      with_items: "{{ cronfiles.files }}"
+    - name: Applying sysctl change
+      command: sysctl -p
 
-    - name: 2.3.4 Find files and links based on $PATH
-      shell: echo $PATH
-      register: pathvar
-
-    - name: Find regular files
-      find:
-        paths: '{{ pathvar.stdout.split(":") }}'
-        file_type: file
-        patterns: '*'
-        get_checksum: yes
-        hidden: yes
-      register: regular_files
-
-    - name: Find symlinks
-      find:
-        paths: '{{ pathvar.stdout.split(":") }}'
-        file_type: link
-        patterns: '*'
-        get_checksum: yes
-        hidden: yes
-      register: symlinks
-
-    - name: Output list of regular files to admin
-      debug:
-        msg: "Found regular applications: {{ regular_files.files | map(attribute='path') | list }}"
-
-    - name: Output list of symlinks to admin
-      debug:
-        msg: "Found symlinks: {{ symlinks.files | map(attribute='path') | list }}"
-
-    - pause:
-        prompt: "Do you want to change the permissions of these files to go-w? (yes/no)"
-      register: permissionapprovalfiles
-    
-    - name: 2.3.4 Change permissions of files if admin approves
-      file:
-        path: "{{ item.path }}"
-        mode: go-w
-        state: file
-        owner: root
-      loop: "{{ regular_files.files }}"
-      when: permissionapprovalfiles.user_input == "yes"
-      become: true
-      
-    - pause:
-        prompt: "Do you want to change the permissions of these links to go-w? (yes/no)"
-      register: permissionapprovallinks
-
-    - name: 2.3.4 Change permissions of links if admin approves
-      file:
-        path: "{{ item.path }}"
-        mode: go-w
-        state: link
-        owner: root
-      loop: "{{ symlinks.files }}"
-      when: permissionapprovallinks.user_input == "yes"
-      become: true
-
-    - name: 2.3.5. Set the correct access rights to the startup scripts
-      file:
-        path: "{{ item }}"
-        owner: root
-        group: root
-        mode: '0755'
-      with_fileglob:
-        - /etc/rc*.d/*
-    
-    - name: Set access rights to .service files
-      find:
-        paths: /
-        patterns: "*.service"
-      register: service_files_result
-    
-    - name: Set access rights for .service files
-      file:
-        path: "{{ item.path }}"
-        owner: root
-        group: root
-        mode: '0755'
-      loop: "{{ service_files_result.files }}"
-
-    - name: 2.3.6 Set access rights to /etc/crontab /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly /etc/cron.monthly
-      find:
-        paths: /etc/cron*
-        file_type: any
-      register: found_files
-    - name: Print found files
-      debug:
-        var: found_files
-   
-    - name: Set access rights to found cron files
-      file:
-        path: "{{ item.path }}"
-        mode: 'go-w'
-      loop: "{{ cron_files.files }}"
-
-    - name: 2.3.7 Setting access rights to user files of cron tasks
-      shell: chmod go-w "{{ item }}"
-      with_fileglob:
-        - /var/spool/cron/crontabs/*
-      register: cron_files_result
-    - name: Check the result of changes
-      debug:
-        var: cron_files_result
-
-    - name: 2.3.8 Setting access rights to executable files and operating system libraries
-      shell: echo $PATH
-      register: path_result
-      changed_when: false
-    - name: Set access rights to executable files in paths
-      command: find "{{ item }}" -type f -exec chmod go-w {} +
-      with_items: "{{ path_result.stdout_lines[0].split(':') }}"
-      changed_when: false
-    - name: Set access rights to libraries in paths
-      command: find "{{ item }}" -type f -exec chmod go-w {} +
-      with_items:
-        - /lib
-        - /lib64
-        - /bin
-        - /usr/bin
-      changed_when: false
-    - name: Set access rights to kernel modules
-      command: find /lib/modules/{{ ansible_kernel }} -type f -exec chmod go-w {} +
-      changed_when: false
-
-    - name: 2.3.9 Find files with setuid permissions
-      command: find / -perm -4000 -type f
-      register: found_files_4000
-      ignore_errors: yes
-
-    - name: 2.3.9 Find files with setgid permissions
-      command: find / -perm -2000 -type f
-      register: found_files_2000
-      ignore_errors: yes
-
-    - name: Display found files with setuid permissions
-      debug:
-        msg: "{{ found_files_4000.stdout_lines }}"
-
-    - name: Display found files with setgid permissions
-      debug:
-        msg: "{{ found_files_2000.stdout_lines }}"
-
-    - name: 2.3.9 Remove write permissions from group and others for files with setuid permissions
-      file:
-        path: "{{ item }}"
-        mode: '4755'
-      loop: "{{ found_files_4000.stdout_lines | default([]) }}"
-
-    - name: 2.3.9 Remove write permissions from group and others for files with setgid permissions
-      file:
-        path: "{{ item }}"
-        mode: '2755'
-      loop: "{{ found_files_2000.stdout_lines | default([]) }}"
-
-    - name: 2.3.10 Get home directories
-      shell: ls -d /home/*/
-      register: home_directories_output
-      ignore_errors: true
-
-    - name: 2.3.10 Convert home directories output to list
-      set_fact:
-        home_directories: "{{ home_directories_output.stdout_lines }}"
-      when: home_directories_output is defined
-
-    - name: 2.3.10 Find dot files in home directories
-      find:
-        paths: "{{ item }}"
-        patterns: ".*"
-        file_type: file
-      register: dot_files
-      with_items: "{{ home_directories }}"
-      loop_control:
-        loop_var: item
-
-    - name: 2.3.10 Set the correct access rights to the contents of users' home directories
-      file:
-        path: "{{ item.path }}"
-        mode: go-rwx
-      with_items: "{{ dot_files.files }}"
-      when: dot_files.files | default([])
-      become: true
-
-    - name: 2.3.11. Set correct access rights to users' home directories
-      find:
-        paths: /home
-        patterns: "*"
-        depth: 1
-        file_type: directory
-      register: home_directories_result
-
-    - name: Set correct access rights to users' home directories
-      file:
-        path: "{{ item.path }}"
-        state: directory
-        mode: "0700"
-      loop: "{{ home_directories_result.files }}"
+- name: Update Grub
+  hosts: all
+  become: true
+  remote_user: fstec
+  tasks:
+    - name: Update Grub configuration
+      command: sudo grub2-mkconfig -o /boot/grub2/grub.cfg
