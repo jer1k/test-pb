@@ -1,59 +1,40 @@
-- name: 2.6 Configuring user space protection tools from the Linux kernel
+- name: 2.2 Limitation of privilege mechanisms
   hosts: all
   become: true
-  remote_user: fstec
+  remote_user: «your_user»
+  vars_prompt:
+    - name: "allowed_sudo_users"
+      prompt: "Specify a list of users who should be allowed to use the sudo command (separated by commas)"
+      private: no
   tasks:
-    - name: 2.6.1. Prohibit connection to other processes using ptrace
-      sysctl:
-        name: kernel.yama.ptrace_scope
-        value: "3"
+    - name: 2.2.1 Add pam_wheel.so to /etc/pam.d/su
+      lineinfile:
+        path: /etc/pam.d/su
+        line: "auth required pam_wheel.so use_uid"
+        insertafter: EOF
+    - name: 2.2.1 Get list of users to add to wheel group
+      pause:
+        prompt: "Please provide the list of users to add to the wheel group"
+      register: admin_input
+    - name: Add users to wheel group
+      lineinfile:
+        path: /etc/group
+        regexp: '^wheel:'
+        line: "wheel:x:10:root,{{ admin_input.wheel_group }}"
+      when: wheel_group.stdout is defined
+    - name: 2.2.2 Limit the list of users who are allowed to use the sudo command and commands allowed to be executed via sudo by revising the /etc/sudoers file
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ item }} ALL=(ALL:ALL) ALL"
         state: present
-
-    - name: 2.6.2. Limit unsafe options for passing through symbolic links
-      sysctl:
-        name: fs.protected_symlinks
-        value: "1"
-        state: present
-
-
-    - name: 2.6.3. Limit unsafe options for working with hard links
-      sysctl:
-        name: fs.protected_hardlinks
-        value: "1"
-        state: present
-
-    - name: 2.6.4. Enable protection against unintentional writing to a FIFO object
-      sysctl:
-        name: fs.protected_fifos
-        value: "2"
-        state: present
-
-    - name: 2.6.5. Enable protection against unintentional writing to a file
-      become: yes
-      sysctl:
-        name: fs.protected_regular
-        value: 2
-      register: sysctl_result
-    - name: Check the result of changing the sysctl option
-      debug:
-        var: sysctl_result
-
-    - name: 2.6.6. Prohibit the creation of core dump
-      sysctl:
-        name: fs.suid_dumpable
-        value: 0
-      register: sysctl_result
-    - name: Check the result of changing the sysctl option
-      debug:
-        var: sysctl_result
-    
-    - name: Applying sysctl change
-      command: sysctl -p
-
-- name: Update Grub
-  hosts: all
-  become: true
-  remote_user: fstec
-  tasks:
-    - name: Update Grub configuration
-      command: sudo grub2-mkconfig -o /boot/grub2/grub.cfg
+        regexp: "^{{ item }}"
+      with_items: "{{ allowed_sudo_users.split(',') }}"
+      when: allowed_sudo_users is defined
+      changed_when: false
+    - name: Prohibit the use of sudo for other users
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ item }}"
+        state: absent
+      with_lines: "grep -vE '^{{ allowed_sudo_users }}' /etc/passwd | cut -d: -f1 | sed 's/^/%/g' | sed 's/$/ ALL=(ALL:ALL) ALL/'"
+      when: allowed_sudo_users is defined
